@@ -1,19 +1,4 @@
-// advertenciaGrupos.js
-
-import 'dotenv/config';
-import pkg from 'pg';
-const { Pool } = pkg;
-
-// Conexão com Neon/Postgres
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }
-});
-
-// Testar conexão ao iniciar
-pool.connect()
-  .then(() => console.log("✅ Conectado ao banco Neon/Postgres!"))
-  .catch(err => console.error("❌ Erro ao conectar ao banco:", err));
+import pool from '../../db.js'; // ⬅️ pool global do Neon DB
 
 // Funções de banco
 async function getAdvertencias(userId, groupId) {
@@ -93,7 +78,7 @@ async function tratarAdvertencia(sock, groupId, userId) {
     await sendMessage(
       sock,
       groupId,
-      `@${userId.split('@')[0]}, devido à reincidência no descumprimento das regras estabelecidas neste grupo, sua permanência foi *revogada* e você foi removido ❌.`,
+      `@${userId.split('@')[0]}, devido à reincidência no descumprimento das regras do grupo, você foi removido ❌.`,
       userId
     );
     await resetAdvertencia(userId, groupId);
@@ -101,9 +86,8 @@ async function tratarAdvertencia(sock, groupId, userId) {
     await sendMessage(
       sock,
       groupId,
-      `@${userId.split('@')[0]}, identificamos um comportamento em desacordo com as *normas do grupo*.  
-Esta é sua *advertência* ${count}/3 ⚠️.  
-Ao atingir 3 advertências, sua permanência será revogada e você será removido.`,
+      `@${userId.split('@')[0]}, esta é sua *advertência* ${count}/3 ⚠️.  
+Ao atingir 3 advertências, você será removido.`,
       userId
     );
   }
@@ -124,8 +108,6 @@ async function handleMessage(sock, message) {
   } catch (err) {
     console.error("Erro ao verificar admin:", err);
   }
-
-  console.log(`isAdmin=${isAdmin}`);
 
   const sendNoPermission = async () => {
     await sendMessage(

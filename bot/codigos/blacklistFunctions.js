@@ -1,5 +1,4 @@
-// blacklistFunctions.js
-import { query } from '../../database.js';
+import pool from '../../db.js';
 
 export const BOT_TITLE = '👏🍻 *DﾑMﾑS* 💃🔥 *Dﾑ* *NIGӇԵ*💃🎶🍾🍸';
 
@@ -10,8 +9,6 @@ export const BOT_TITLE = '👏🍻 *DﾑMﾑS* 💃🔥 *Dﾑ* *NIGӇԵ*💃🎶
 export function normalizeNumber(number) {
     let digits = number.replace(/@.*$/, '').replace(/\D/g, '');
     if (digits.length === 11 && !digits.startsWith('55')) digits = '55' + digits;
-
-    // Formato que o Baileys reconhece
     return `${digits}@s.whatsapp.net`;
 }
 
@@ -25,7 +22,7 @@ export function adminOnlyMessage() {
 export async function isBlacklistedRealtime(number) {
     try {
         const normalizedId = normalizeNumber(number);
-        const result = await query('SELECT whatsapp_id FROM blacklist WHERE whatsapp_id = $1', [normalizedId]);
+        const result = await pool.query('SELECT whatsapp_id FROM blacklist WHERE whatsapp_id = $1', [normalizedId]);
         return result.rowCount > 0;
     } catch (err) {
         console.error(`${BOT_TITLE} ❌ Erro ao verificar blacklist:`, err);
@@ -42,7 +39,7 @@ export async function addToBlacklist(whatsappId, motivo = null) {
         const alreadyBlocked = await isBlacklistedRealtime(normalizedId);
         if (alreadyBlocked) return `${BOT_TITLE} ⚠️ NÚMERO ${normalizedId} já está na blacklist.`;
 
-        await query('INSERT INTO blacklist (whatsapp_id, motivo) VALUES ($1, $2)', [normalizedId, motivo]);
+        await pool.query('INSERT INTO blacklist (whatsapp_id, motivo) VALUES ($1, $2)', [normalizedId, motivo]);
         return `${BOT_TITLE} ✅ NÚMERO ${normalizedId} adicionado à blacklist.`;
     } catch (err) {
         console.error(`${BOT_TITLE} ❌ Erro ao adicionar ${whatsappId}:`, err);
@@ -56,7 +53,7 @@ export async function addToBlacklist(whatsappId, motivo = null) {
 export async function removeFromBlacklist(whatsappId) {
     try {
         const normalizedId = normalizeNumber(whatsappId);
-        const result = await query('DELETE FROM blacklist WHERE whatsapp_id = $1', [normalizedId]);
+        const result = await pool.query('DELETE FROM blacklist WHERE whatsapp_id = $1', [normalizedId]);
 
         if (result.rowCount > 0) return `${BOT_TITLE} 🟢 NÚMERO ${normalizedId} removido da blacklist 🔓`;
         return `${BOT_TITLE} ⚠️ NÚMERO ${normalizedId} não está na blacklist.`;
@@ -71,7 +68,7 @@ export async function removeFromBlacklist(whatsappId) {
  */
 export async function listBlacklist() {
     try {
-        const result = await query('SELECT * FROM blacklist ORDER BY created_at DESC');
+        const result = await pool.query('SELECT * FROM blacklist ORDER BY created_at DESC');
         if (!result.rows.length) return `${BOT_TITLE} 📋 A blacklist está vazia.`;
         return `${BOT_TITLE}\n\n` + result.rows.map(r => `• ${r.whatsapp_id} - ${r.motivo || 'Sem motivo'}`).join('\n');
     } catch (err) {

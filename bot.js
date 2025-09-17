@@ -1,4 +1,6 @@
-// bot.js - Damas da Night Bot - Versão Ultra Limpa
+// bot.js - Damas da Night Bot
+import 'dotenv/config'; // ⬅️ Carrega variáveis do .env
+
 import { makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason } from '@whiskeysockets/baileys';
 import qrcode from 'qrcode-terminal';
 import fs from 'fs';
@@ -7,7 +9,8 @@ import { handleMessages } from './bot/codigos/messageHandler.js';
 import { configurarBoasVindas } from './bot/codigos/boasVindas.js';
 import { configurarDespedida } from './bot/codigos/despedidaMembro.js';
 import { isBlacklistedRealtime } from './bot/codigos/blacklistFunctions.js';
-import { iniciarVerificacaoPeriodica, verificarBlacklistAgora } from './bot/codigos/blacklistCron.js'; // ⬅️ cron + manual
+import { iniciarVerificacaoPeriodica, verificarBlacklistAgora } from './bot/codigos/blacklistCron.js';
+import pool from './db.js'; // ⬅️ Importa pool do Neon DB
 
 // Logger customizado (apenas erros críticos)
 const logger = pino({ level: 'fatal', enabled: false });
@@ -71,7 +74,6 @@ async function connectToWhatsApp() {
 
                 if (!fs.existsSync('./downloads')) fs.mkdirSync('./downloads', { recursive: true });
 
-                // ⬇️ Cron de verificação periódica
                 iniciarVerificacaoPeriodica(sock);
             }
 
@@ -99,7 +101,6 @@ async function connectToWhatsApp() {
             }
         });
 
-        // Monitoramento de entrada/saída de membros
         sock.ev.on('group-participants.update', async (update) => {
             try {
                 const groupId = update.id;
@@ -124,7 +125,6 @@ async function connectToWhatsApp() {
             } catch (error) { }
         });
 
-        // Processamento de mensagens otimizado
         sock.ev.on("messages.upsert", async ({ messages, type }) => {
             if (type !== 'notify') return;
 
@@ -138,12 +138,10 @@ async function connectToWhatsApp() {
                 for (const message of validMessages) {
                     await handleMessages(sock, message);
 
-                    // 🔹 Comando manual de blacklist (somente admins)
                     const messageText = message.message?.conversation || message.message?.extendedTextMessage?.text;
                     if (messageText && messageText.toLowerCase() === '#veriflista') {
                         const groupId = message.key.remoteJid;
 
-                        // 1️⃣ Obter lista de admins do grupo
                         const metadata = await sock.groupMetadata(groupId);
                         const admins = metadata.participants
                             .filter(p => p.admin === 'admin' || p.admin === 'superadmin')
@@ -151,13 +149,11 @@ async function connectToWhatsApp() {
 
                         const sender = message.key.participant || message.key.remoteJid;
 
-                        // 2️⃣ Verificar se quem enviou é admin
                         if (!admins.includes(sender)) {
                             await sock.sendMessage(groupId, { text: '❌ Apenas administradores podem usar este comando.' });
                             continue;
                         }
 
-                        // 3️⃣ Executar verificação manual
                         await verificarBlacklistAgora(sock, groupId);
                         await sock.sendMessage(groupId, { text: '✅ Verificação da blacklist executada neste grupo.' });
                     }
@@ -178,16 +174,12 @@ async function connectToWhatsApp() {
     }
 }
 
-// Handlers do sistema
 process.on('SIGINT', () => { console.log('\n🌙 Damas da Night Bot desconectado'); process.exit(0); });
 process.on('SIGTERM', () => { console.log('\n🌙 Bot finalizado'); process.exit(0); });
-
-// Suprimir erros não críticos
 process.on('unhandledRejection', () => { });
 process.on('uncaughtException', (error) => {
     if (error.message.includes('baileys') || error.message.includes('socket')) return;
     console.error('❌ Erro crítico:', error.message);
 });
 
-// Iniciar bot
 connectToWhatsApp();
