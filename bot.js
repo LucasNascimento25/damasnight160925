@@ -1,6 +1,4 @@
-// bot.js - Damas da Night Bot
-import 'dotenv/config'; // ⬅️ Carrega variáveis do .env
-
+import 'dotenv/config';
 import { makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason } from '@whiskeysockets/baileys';
 import qrcode from 'qrcode-terminal';
 import fs from 'fs';
@@ -9,11 +7,11 @@ import { handleMessages } from './bot/codigos/messageHandler.js';
 import { configurarBoasVindas } from './bot/codigos/boasVindas.js';
 import { configurarDespedida } from './bot/codigos/despedidaMembro.js';
 import { isBlacklistedRealtime } from './bot/codigos/blacklistFunctions.js';
-import { iniciarVerificacaoPeriodica, verificarBlacklistAgora } from './bot/codigos/blacklistCron.js';
-import pool from './db.js'; // ⬅️ Importa pool do Neon DB
+import { verificarBlacklistAgora } from './bot/codigos/blacklistChecker.js';
+import pool from './db.js';
 
-// Logger customizado (apenas erros críticos)
 const logger = pino({ level: 'fatal', enabled: false });
+const BOT_TITLE = '👏🍻 *DﾑMﾑS* 💃🔥 *Dﾑ* *NIGӇԵ*💃🎶🍾🍸';
 
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 5;
@@ -56,6 +54,7 @@ async function connectToWhatsApp() {
 
         sock.ev.on("creds.update", saveCreds);
 
+        // Conexão e QR code
         sock.ev.on("connection.update", async ({ connection, lastDisconnect, qr }) => {
             if (qr) {
                 console.log("\n📱 Escaneie o QR Code:");
@@ -65,7 +64,7 @@ async function connectToWhatsApp() {
             }
 
             if (connection === "open") {
-                console.log("✅ DAMAS DA NIGHT Bot conectado com sucesso!");
+                console.log(`✅ ${BOT_TITLE} Bot conectado com sucesso!`);
                 console.log("💾 Conexão com banco de dados: OK");
                 console.log("🚀 Bot operacional e monitorando grupos...\n");
 
@@ -73,8 +72,6 @@ async function connectToWhatsApp() {
                 isConnecting = false;
 
                 if (!fs.existsSync('./downloads')) fs.mkdirSync('./downloads', { recursive: true });
-
-                iniciarVerificacaoPeriodica(sock);
             }
 
             if (connection === "close") {
@@ -101,6 +98,7 @@ async function connectToWhatsApp() {
             }
         });
 
+        // Eventos de participantes do grupo
         sock.ev.on('group-participants.update', async (update) => {
             try {
                 const groupId = update.id;
@@ -122,14 +120,18 @@ async function connectToWhatsApp() {
                         await configurarDespedida(sock, groupId, participant);
                     }
                 }
-            } catch (error) { }
+            } catch (error) {
+                console.error('❌ Erro no evento de participantes:', error);
+            }
         });
 
+        // Listener de mensagens
         sock.ev.on("messages.upsert", async ({ messages, type }) => {
             if (type !== 'notify') return;
 
             try {
-                const validMessages = messages.filter(msg => msg &&
+                const validMessages = messages.filter(msg =>
+                    msg &&
                     !msg.key.fromMe &&
                     msg.messageTimestamp &&
                     (Date.now() - (msg.messageTimestamp * 1000)) < 30000
@@ -141,24 +143,45 @@ async function connectToWhatsApp() {
                     const messageText = message.message?.conversation || message.message?.extendedTextMessage?.text;
                     if (messageText && messageText.toLowerCase() === '#veriflista') {
                         const groupId = message.key.remoteJid;
-
-                        const metadata = await sock.groupMetadata(groupId);
-                        const admins = metadata.participants
-                            .filter(p => p.admin === 'admin' || p.admin === 'superadmin')
-                            .map(p => p.id);
-
                         const sender = message.key.participant || message.key.remoteJid;
 
-                        if (!admins.includes(sender)) {
-                            await sock.sendMessage(groupId, { text: '❌ Apenas administradores podem usar este comando.' });
+                        // Verifica admin consultando participantes
+                        const metadata = await sock.groupMetadata(groupId);
+                        const participantData = metadata.participants.find(p => p.id === sender);
+                        const isAdmin = participantData?.admin === 'admin' || participantData?.admin === 'superadmin';
+
+                        if (!isAdmin) {
+                            const adminMsg = await sock.sendMessage(groupId, { text: `${BOT_TITLE} ❌ Apenas administradores podem usar este comando.` });
+                            setTimeout(async () => {
+                                await sock.sendMessage(groupId, { delete: { remoteJid: adminMsg.key.remoteJid, id: adminMsg.key.id, fromMe: true } });
+                            }, 8000);
                             continue;
                         }
 
-                        await verificarBlacklistAgora(sock, groupId);
-                        await sock.sendMessage(groupId, { text: '✅ Verificação da blacklist executada neste grupo.' });
+                        // Mensagem temporária de checando blacklist
+                        const checkingMsg = await sock.sendMessage(groupId, { text: `${BOT_TITLE} 🔎 Checando a blacklist...` });
+
+                        // Executa verificação otimizada da blacklist
+                        const removidos = await verificarBlacklistAgora(sock, groupId);
+
+                        // Prepara mensagem de resultado
+                        const resultText = removidos.length > 0
+                            ? `${BOT_TITLE} 🚨 *Blacklist Atualizada* 💃🎶\n✅ ${removidos.length} usuário(s) removido(s) do grupo:\n• ${removidos.join('\n• ')}`
+                            : `${BOT_TITLE} ✅ Nenhum usuário da blacklist encontrado neste grupo.`;
+
+                        // Envia resultado
+                        const resultMsg = await sock.sendMessage(groupId, { text: resultText });
+
+                        // Remove todas as mensagens relacionadas ao #veriflista após 8 segundos
+                        setTimeout(async () => {
+                            await sock.sendMessage(groupId, { delete: { remoteJid: checkingMsg.key.remoteJid, id: checkingMsg.key.id, fromMe: true } });
+                            await sock.sendMessage(groupId, { delete: { remoteJid: resultMsg.key.remoteJid, id: resultMsg.key.id, fromMe: true } });
+                        }, 8000);
                     }
                 }
-            } catch (error) { }
+            } catch (error) {
+                console.error('❌ Erro no listener de mensagens:', error);
+            }
         });
 
         return sock;
@@ -174,8 +197,9 @@ async function connectToWhatsApp() {
     }
 }
 
-process.on('SIGINT', () => { console.log('\n🌙 Damas da Night Bot desconectado'); process.exit(0); });
-process.on('SIGTERM', () => { console.log('\n🌙 Bot finalizado'); process.exit(0); });
+// Finalização limpa
+process.on('SIGINT', () => { console.log(`\n🌙 ${BOT_TITLE} Bot desconectado`); process.exit(0); });
+process.on('SIGTERM', () => { console.log(`\n🌙 ${BOT_TITLE} Bot finalizado`); process.exit(0); });
 process.on('unhandledRejection', () => { });
 process.on('uncaughtException', (error) => {
     if (error.message.includes('baileys') || error.message.includes('socket')) return;
