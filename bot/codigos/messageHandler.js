@@ -2,7 +2,7 @@
 import { handleBlacklistCommands } from './blacklistHandler.js';
 import { handleMusicaCommands } from './musicaHandler.js';
 import { handleMessage as handleAdvertencias } from './advertenciaGrupos.js';
-import { handleAntiLink } from './antiLink.js';
+import { handleAntiLink } from './antilink.js';
 
 export async function handleMessages(sock, message) {
     // Ignora mensagens inválidas
