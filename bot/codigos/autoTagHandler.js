@@ -66,13 +66,20 @@ class AutoTagHandler {
 
             const groupId = from;
 
+            // Verifica se o grupo está ativo
             if (this.groups[groupId] && !this.groups[groupId].enabled) return null;
 
-            if (this.groups[groupId]?.adminOnly) {
-                const isAdmin = await this.isUserAdmin(sock, groupId, userId);
-                if (!isAdmin) return { error: true, message: '❌ Apenas admins podem usar o #all damas neste grupo!' };
+            // VERIFICA SE O USUÁRIO É ADMIN - AGORA OBRIGATÓRIO
+            const isAdmin = await this.isUserAdmin(sock, groupId, userId);
+            if (!isAdmin) {
+                const styledTitle = "👏🍻 *DﾑMﾑS* 💃🔥 *Dﾑ* *NIGӇԵ*💃🎶🍾🍸";
+                return { 
+                    error: true, 
+                    message: `${styledTitle}\n\n🚫 *ACESSO NEGADO*\n\n❌ Apenas administradores podem usar o comando \`#all damas\`!\n\n👨‍💼 Solicite a um admin para marcar o grupo.` 
+                };
             }
 
+            // Atualiza o grupo se necessário
             if (!this.groups[groupId] || this.isGroupOutdated(groupId)) {
                 await this.updateGroup(sock, groupId);
             }
@@ -83,9 +90,13 @@ class AutoTagHandler {
             const cleanMessage = content.replace(/#all\s+damas/gi, '').trim();
             const mentions = this.generateMentions(groupData.participants, userId);
 
+            // Adiciona o título estilizado na mensagem
+            const styledTitle = "👏🍻 *DﾑMﾑS* 💃🔥 *Dﾑ* *NIGӇԵ*💃🎶🍾🍸";
+            const finalMessage = cleanMessage ? `${styledTitle}\n\n${cleanMessage}` : styledTitle;
+
             return {
                 originalMessage: content,
-                cleanMessage,
+                cleanMessage: finalMessage,
                 mentions,
                 tagsCount: mentions.length,
                 groupName: groupData.name
@@ -98,8 +109,17 @@ class AutoTagHandler {
 
     async isUserAdmin(sock, groupId, userId) {
         try {
-            return await sock.isGroupAdmin?.(groupId, userId) || false;
-        } catch {
+            // Primeiro tenta pelo método direto
+            if (sock.isGroupAdmin) {
+                return await sock.isGroupAdmin(groupId, userId);
+            }
+
+            // Método alternativo: busca nos metadados do grupo
+            const groupMetadata = await sock.groupMetadata(groupId);
+            const participant = groupMetadata.participants.find(p => p.id === userId);
+            return participant?.admin !== null && participant?.admin !== undefined;
+        } catch (error) {
+            console.error('❌ Erro ao verificar admin:', error);
             return false;
         }
     }
@@ -118,15 +138,17 @@ class AutoTagHandler {
         if (!from.endsWith('@g.us')) return false;
         if (!content.startsWith('!autotag-')) return false;
 
-        const isAdmin = await sock.isGroupAdmin?.(from, userId) || false;
+        const isAdmin = await this.isUserAdmin(sock, from, userId);
         if (!isAdmin) {
-            await sock.sendMessage(from, { text: '❌ Apenas admins podem usar comandos do AutoTag!' });
+            await sock.sendMessage(from, { text: '❌ Apenas administradores podem usar comandos do AutoTag!' });
             return true;
         }
 
         if (content === '!autotag-update') {
             const count = await this.updateGroup(sock, from);
-            await sock.sendMessage(from, { text: `✅ Grupo atualizado!\n📊 ${count} membros encontrados\n🕒 ${new Date().toLocaleString('pt-BR')}` });
+            await sock.sendMessage(from, { 
+                text: `✅ *GRUPO ATUALIZADO*\n\n📊 ${count} membros encontrados\n🕒 ${new Date().toLocaleString('pt-BR')}\n\n💡 Apenas admins podem usar \`#all damas\`` 
+            });
             return true;
         }
 
@@ -135,10 +157,10 @@ class AutoTagHandler {
             const statusText = `
 🏷️ *STATUS DO AUTOTAG*
 
-📊 **Participantes:** ${status.participants}
+📊 *Participantes:* ${status.participants}
 🔧 **Ativo:** ${status.enabled ? '✅ Sim' : '❌ Não'}
-👨‍💼 **Admin Only:** ${status.adminOnly ? '✅ Sim' : '❌ Não'}
-🕒 **Última Atualização:** ${status.lastUpdated !== 'Nunca' ? new Date(status.lastUpdated).toLocaleString('pt-BR') : 'Nunca'}
+🔐 *Restrição:* 👨‍💼 Apenas Administradores
+🕒 *Última Atualização:* ${status.lastUpdated !== 'Nunca' ? new Date(status.lastUpdated).toLocaleString('pt-BR') : 'Nunca'}
 
 *Use !autotag-help para ver comandos*
             `.trim();
@@ -146,27 +168,56 @@ class AutoTagHandler {
             return true;
         }
 
-        if (content === '!autotag-on') { await this.toggleGroupStatus(from, true); await sock.sendMessage(from, { text: '✅ AutoTag ativado neste grupo!' }); return true; }
-        if (content === '!autotag-off') { await this.toggleGroupStatus(from, false); await sock.sendMessage(from, { text: '❌ AutoTag desativado neste grupo!' }); return true; }
-        if (content === '!autotag-admin-on') { await this.toggleAdminOnly(from, true); await sock.sendMessage(from, { text: '🔒 AutoTag agora é apenas para admins!' }); return true; }
-        if (content === '!autotag-admin-off') { await this.toggleAdminOnly(from, false); await sock.sendMessage(from, { text: '🔓 AutoTag liberado para todos os membros!' }); return true; }
+        if (content === '!autotag-on') { 
+            await this.toggleGroupStatus(from, true); 
+            await sock.sendMessage(from, { 
+                text: '✅ *AUTOTAG ATIVADO*\n\n🔐 Apenas administradores podem usar `#all damas`' 
+            }); 
+            return true; 
+        }
+
+        if (content === '!autotag-off') { 
+            await this.toggleGroupStatus(from, false); 
+            await sock.sendMessage(from, { text: '❌ AutoTag desativado neste grupo!' }); 
+            return true; 
+        }
+
+        // Removidos os comandos admin-on/off já que agora é sempre restrito para admins
+        if (content === '!autotag-admin-on' || content === '!autotag-admin-off') {
+            await sock.sendMessage(from, { 
+                text: '💡 *INFORMAÇÃO*\n\nO AutoTag agora é sempre restrito para administradores!\n\n🔐 Apenas admins podem usar `#all damas`' 
+            });
+            return true;
+        }
 
         if (content === '!autotag-help') {
             const helpText = `
 🏷️ *COMANDOS DO AUTOTAG*
 
-📋 **Para Usuários:**
+👨‍💼 *Para Administradores:*
 - \`Sua mensagem #all damas\` - Marca todos
-
-👨‍💼 **Para Admins:**
-- \`!autotag-status\` - Ver status
-- \`!autotag-update\` - Atualizar lista
-- \`!autotag-on/off\` - Ativar/Desativar
-- \`!autotag-admin-on/off\` - Modo admin
+- \`!autotag-status\` - Ver status do grupo
+- \`!autotag-update\` - Atualizar lista de membros
+- \`!autotag-on/off\` - Ativar/Desativar sistema
 - \`!autotag-help\` - Esta ajuda
 
-✨ **Como usar:**
-Digite sua mensagem normalmente e adicione \`#all damas\` no final. O \`#all damas\` desaparece e todos recebem notificação!
+🔐 *RESTRIÇÃO DE ACESSO*
+Apenas administradores podem usar o comando \`#all damas\`
+
+✨ *Como usar:*
+Digite sua mensagem normalmente e adicione \`#all damas\` no final. 
+
+📝 *Exemplo:*
+\`Festa hoje às 22h #all damas\`
+
+💃 **Resultado:**
+👏🍻 *DﾑMﾑS* 💃🔥 *Dﾑ* *NIGӇԵ*💃🎶🍾🍸
+
+Festa hoje às 22h
+
+🔔 *Todos os membros recebem notificação automaticamente (menções invisíveis)*
+
+⚠️ *Usuários comuns* que tentarem usar receberão uma mensagem de acesso negado.
             `.trim();
             await sock.sendMessage(from, { text: helpText });
             return true;
@@ -193,7 +244,7 @@ Digite sua mensagem normalmente e adicione \`#all damas\` no final. O \`#all dam
         const group = this.groups[groupId];
         return {
             enabled: group?.enabled ?? true,
-            adminOnly: group?.adminOnly ?? false,
+            adminOnly: true, // Agora sempre true
             participants: group?.participants?.length ?? 0,
             lastUpdated: group?.lastUpdated ?? 'Nunca'
         };
