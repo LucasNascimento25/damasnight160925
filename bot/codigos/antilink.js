@@ -1,223 +1,306 @@
-// Função para obter o link de convite do grupo
+// Sistema AntiLink Otimizado - Redução de Falsos Positivos
 const getGroupInviteLink = async (sock, groupId) => {
     try {
         const inviteCode = await sock.groupInviteCode(groupId);
         return `https://chat.whatsapp.com/${inviteCode}`;
     } catch (error) {
-        console.error('Erro ao obter o link de convite do grupo:', error);
+        console.error('Erro ao obter link do grupo:', error);
         return null;
     }
 };
 
-// Função para tentar deletar mensagem o mais rápido possível
-const deleteMessageWithRetries = async (sock, groupId, messageKey, maxRetries = 3) => {
-    let retryCount = 0;
-
-    while (retryCount < maxRetries) {
+const deleteMessage = async (sock, groupId, messageKey) => {
+    const delays = [0, 100, 500, 1000, 2000, 5000];
+    
+    for (let i = 0; i < delays.length; i++) {
         try {
-            // Tentativa imediata de exclusão
-            await sock.sendMessage(groupId, { delete: messageKey });
-            console.log(`Mensagem DELETADA (tentativa ${retryCount + 1})`);
+            if (delays[i] > 0) await new Promise(r => setTimeout(r, delays[i]));
+            
+            const key = {
+                remoteJid: messageKey.remoteJid || groupId,
+                fromMe: false,
+                id: messageKey.id,
+                participant: messageKey.participant
+            };
+            
+            await sock.sendMessage(groupId, { delete: key });
+            console.log(`✅ Mensagem deletada (tentativa ${i + 1})`);
             return true;
         } catch (error) {
-            retryCount++;
-            console.error(`Erro na tentativa ${retryCount} de deletar mensagem:`, error);
-
-            if (retryCount < maxRetries) {
-                // Delay mínimo (50ms)
-                await new Promise(resolve => setTimeout(resolve, 50));
-            }
+            console.log(`❌ Tentativa ${i + 1} falhou`);
         }
     }
-
-    console.error(`Falha ao deletar mensagem após ${maxRetries} tentativas`);
     return false;
 };
 
-// Função para notificar administradores e infrator (sem mostrar link)
-const notifyAdminsAndOffender = async (sock, groupId, offenderId, detectedLink, deletionSuccess = true) => {
+const notifyAdminsAndRemoveUser = async (sock, groupId, userId, messageType, success, detectedLinks) => {
     try {
-        const groupMetadata = await sock.groupMetadata(groupId);
-
-        // Filtra os administradores
-        const admins = groupMetadata.participants.filter(
-            participant => participant.admin === 'admin' || participant.admin === 'superadmin'
-        );
-
-        // Cria lista de menções: usuário infrator + administradores
-        const mentions = [offenderId, ...admins.map(admin => admin.id)];
-
-        // Mensagem adaptada baseada no sucesso da exclusão
-        let statusMessage = '';
-        if (deletionSuccess) {
-            statusMessage = '✅ *Mensagem removida automaticamente*';
+        const groupData = await sock.groupMetadata(groupId);
+        const admins = groupData.participants.filter(p => p.admin);
+        const mentions = [userId, ...admins.map(a => a.id)];
+        
+        const status = success ? '✅ Mensagem removida automaticamente' : '⚠️ Remoção manual necessária';
+        const emoji = { imagem: '🖼️', video: '🎥', documento: '📄' }[messageType] || '💬';
+        
+        let contentType = '';
+        if (messageType === 'texto') {
+            contentType = '🔗 Link suspeito';
         } else {
-            statusMessage = '⚠️ *Falha na remoção automática - Ação manual necessária*';
+            contentType = `${emoji} ${messageType.charAt(0).toUpperCase() + messageType.slice(1)} com link`;
         }
+        
+        // Função para categorizar o tipo de link sem mostrar o link real
+        const categorizeLinkType = (links) => {
+            const types = [];
+            for (const link of links) {
+                const domain = link.replace(/^https?:\/\//, '').toLowerCase();
+                if (domain.includes('youtube.com') || domain.includes('youtu.be')) {
+                    types.push('🎥 Vídeo (YouTube)');
+                } else if (domain.includes('instagram.com') || domain.includes('instagr.am')) {
+                    types.push('📸 Rede Social (Instagram)');
+                } else if (domain.includes('facebook.com') || domain.includes('fb.com')) {
+                    types.push('👥 Rede Social (Facebook)');
+                } else if (domain.includes('twitter.com') || domain.includes('t.co')) {
+                    types.push('🐦 Rede Social (Twitter)');
+                } else if (domain.includes('tiktok.com')) {
+                    types.push('🎵 Vídeo (TikTok)');
+                } else if (domain.includes('whatsapp.com')) {
+                    types.push('💬 Grupo WhatsApp');
+                } else if (domain.includes('telegram.')) {
+                    types.push('📱 Telegram');
+                } else if (domain.match(/\.(com|org|net|br|co\.uk|io|me|app)$/)) {
+                    types.push('🌐 Site/Link externo');
+                } else {
+                    types.push('🔗 Link suspeito');
+                }
+            }
+            return [...new Set(types)]; // Remove duplicatas
+        };
 
-        // Mensagem sem mostrar link do usuário
-        const message = `🚨🔗 *ᴍᴇɴꜱᴀɢᴇᴍ ꜱᴜꜱᴘᴇɪᴛᴀ ᴅᴇᴛᴇᴄᴛᴀᴅᴀ!* \n  
-${statusMessage}
+        const linkTypes = categorizeLinkType(detectedLinks);
 
-*𝚄𝚜𝚞𝚊𝚛𝚒𝚘:* @${offenderId.split('@')[0]} \n 
-*𝙼𝚘𝚝𝚒𝚟𝚘:* 🚨⚠️ Esta mensagem contém um link que não é permitido no grupo 👏🍻 *DﾑMﾑS* 💃🔥 *Dﾑ NIGӇԵ* 💃🎶🍾🍸 \n  
-*🚨🔊 𝙰𝚍𝚖𝚒𝚗𝚒𝚜𝚝𝚛𝚊𝚍𝚘𝚛𝚎𝚜:* ${admins.map(admin => `@${admin.id.split('@')[0]}`).join(', ')} \n  
-*𝙿𝙾𝚁 𝚅𝙰𝙵𝙾𝚁, 𝙰𝚅𝙰𝙻𝙸𝙴𝙼 𝙰 𝚂𝙸𝚃𝚄𝙰𝙲𝙰𝙾!*`;
+        const warningMessage = `👏🍻 *DﾑMﾑS* 💃🔥 *Dﾑ* *NIGӇԵ* 💃🎶🍾🍸
 
-        // Envia a mensagem para o grupo com menções
+🚨 *ALERTA DE SEGURANÇA* 🚨
+
+${status} por conter link(s) não autorizado(s).
+
+⚠️ *POLÍTICA DO GRUPO: NENHUM LINK EXTERNO É PERMITIDO*
+
+${contentType}
+👤 *Usuário infrator:* @${userId.split('@')[0]}
+🚫 *Tipo(s) detectado(s):* ${linkTypes.join(', ')}
+
+⚠️ *ATENÇÃO ADMINISTRADORES:*
+${admins.map(a => `@${a.id.split('@')[0]}`).join(', ')}
+
+*Por medida de segurança, em 20 segundos o usuário infrator será removido do grupo.*
+
+🔒 *Avaliem a situação rapidamente!*`;
+
         await sock.sendMessage(groupId, {
-            text: message,
-            mentions: mentions
+            text: warningMessage,
+            mentions
         });
 
-        console.log('Usuário infrator e administradores foram mencionados (sem exibir link).');
+        // Remove o usuário após 20 segundos
+        setTimeout(async () => {
+            try {
+                await sock.groupParticipantsUpdate(groupId, [userId], 'remove');
+                
+                await sock.sendMessage(groupId, {
+                    text: `🚨 *USUÁRIO REMOVIDO POR SEGURANÇA* 🚨\n\n👤 @${userId.split('@')[0]} foi removido do grupo por enviar link não autorizado.\n\n⚠️ *LEMBRETE: Nenhum link externo é permitido neste grupo!*\n🔒 *Medida automática de proteção ativada.*`,
+                    mentions: [userId]
+                });
+                
+                console.log(`🚫 Usuário ${userId} removido automaticamente`);
+            } catch (error) {
+                console.error('❌ Erro ao remover usuário:', error);
+                
+                await sock.sendMessage(groupId, {
+                    text: `⚠️ *ERRO AO REMOVER USUÁRIO*\n\nNão foi possível remover automaticamente @${userId.split('@')[0]}.\n\n*Administradores, removam manualmente por favor.*`,
+                    mentions: [userId, ...admins.map(a => a.id)]
+                });
+            }
+        }, 20000);
+
+        console.log(`⏱️ Remoção automática agendada para ${userId} em 20 segundos`);
     } catch (error) {
-        console.error('Erro ao notificar administradores e usuário:', error);
+        console.error('❌ Erro ao notificar:', error);
     }
 };
 
-// Função para extrair texto da mensagem de forma mais robusta
-const extractMessageText = (msg) => {
-    if (!msg.message) return '';
-
-    // Verifica diferentes tipos de mensagem
-    if (msg.message.conversation) {
-        return msg.message.conversation;
+const extractText = (msg) => {
+    if (!msg.message) return { text: '', type: 'unknown' };
+    
+    const types = {
+        conversation: { text: msg.message.conversation, type: 'texto' },
+        extendedTextMessage: { text: msg.message.extendedTextMessage?.text, type: 'texto' },
+        imageMessage: { text: msg.message.imageMessage?.caption, type: 'imagem' },
+        videoMessage: { text: msg.message.videoMessage?.caption, type: 'video' },
+        documentMessage: { text: msg.message.documentMessage?.caption, type: 'documento' }
+    };
+    
+    for (const [key, value] of Object.entries(types)) {
+        if (msg.message[key]) return { text: value.text || '', type: value.type };
     }
-
-    if (msg.message.extendedTextMessage) {
-        return msg.message.extendedTextMessage.text || '';
-    }
-
-    if (msg.message.imageMessage && msg.message.imageMessage.caption) {
-        return msg.message.imageMessage.caption;
-    }
-
-    if (msg.message.videoMessage && msg.message.videoMessage.caption) {
-        return msg.message.videoMessage.caption;
-    }
-
-    if (msg.message.documentMessage && msg.message.documentMessage.caption) {
-        return msg.message.documentMessage.caption;
-    }
-
-    return '';
+    
+    return { text: '', type: 'unknown' };
 };
 
-// Função para verificar se uma mensagem ainda existe no grupo
-const checkMessageExists = async (sock, groupId, messageKey) => {
-    try {
-        const messages = await sock.fetchMessagesFromWA(groupId, 20);
-        return messages.some(m => m.key.id === messageKey.id);
-    } catch (error) {
-        console.error('Erro ao verificar existência da mensagem:', error);
-        return true; // Assume que existe em caso de erro
+// Função para validar se é realmente um link válido
+const isValidLink = (text) => {
+    // Regex mais rigoroso que exige contexto de link real
+    const strictLinkRegex = /(?:https?:\/\/|www\.)[^\s<>"{}|\\^`\[\]]+\.[a-zA-Z]{2,}(?:\/[^\s<>"{}|\\^`\[\]]*)?/gi;
+    
+    // Regex para WhatsApp links
+    const whatsappRegex = /(?:https?:\/\/)?(?:chat\.)?whatsapp\.com\/(?:invite\/)?[a-zA-Z0-9_-]+/gi;
+    
+    // Regex para domínios suspeitos (sem protocolo, mas com contexto)
+    const suspiciousDomainRegex = /(?:^|\s|[^\w.-])([a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)*\.[a-zA-Z]{2,})(?:\/[^\s]*)?(?=\s|$|[^\w.-])/gi;
+    
+    const links = [];
+    
+    // Procura por links completos (http/https/www)
+    let match;
+    while ((match = strictLinkRegex.exec(text)) !== null) {
+        links.push(match[0]);
     }
+    
+    // Procura por links do WhatsApp
+    while ((match = whatsappRegex.exec(text)) !== null) {
+        links.push(match[0]);
+    }
+    
+    // Procura por domínios suspeitos (mais cauteloso)
+    suspiciousDomainRegex.lastIndex = 0;
+    while ((match = suspiciousDomainRegex.exec(text)) !== null) {
+        const domain = match[1];
+        
+        // Filtros para reduzir falsos positivos
+        const isLikelyLink = (
+            // Tem pelo menos um subdomínio
+            domain.split('.').length >= 2 &&
+            // Não é apenas números (como versões: 1.0, 2.5, etc.)
+            !/^\d+(\.\d+)*$/.test(domain) &&
+            // Não são extensões de arquivo comuns seguidas de espaço
+            !/\.(jpg|jpeg|png|gif|pdf|doc|txt|mp3|mp4|zip|rar)$/i.test(domain) &&
+            // Não é horário (ex: 15.30, 08.45)
+            !/^\d{1,2}\.\d{1,2}$/.test(domain) &&
+            // Não é data (ex: 25.12, 31.01)
+            !/^\d{1,2}\.\d{1,2}(\.\d{2,4})?$/.test(domain) &&
+            // Não é valor monetário (ex: 50.00)
+            !/^\d+\.\d{1,2}$/.test(domain) &&
+            // Não são palavras comuns com ponto no final de frase
+            !/(obrigado|tchau|ola|oi|sim|nao|ok|certo|valeu)\.com$/i.test(domain) &&
+            // TLD deve ser válido
+            /\.(com|org|net|edu|gov|mil|int|co|br|uk|de|fr|it|es|ru|jp|cn|in|au|ca|mx|ar|cl|pe|uy|py|bo|ec|ve|cr|gt|hn|sv|ni|pa|do|cu|jm|ht|tt|bb|gd|lc|vc|ag|kn|dm|pr|vi|aw|cw|sx|bq|tc|ky|bs|bm|gl|fo|is|ie|pt|ad|mc|sm|va|mt|cy|bg|ro|hu|pl|cz|sk|si|hr|ba|rs|me|mk|al|gr|tr|by|ua|md|lt|lv|ee|fi|se|no|dk|nl|be|lu|ch|at|li|fl|io|me|tv|cc|ws|tk|ml|ga|cf|ac|sh|st|tm|gg|je|im|ai|ms|vg|as|gu|mp|pw|fm|mh|ki|nr|nu|ck|to|sb|vu|nc|pf|wf)$/i.test(domain)
+        );
+        
+        if (isLikelyLink) {
+            // Verifica se não está em contexto de conversa normal
+            const beforeText = text.substring(Math.max(0, match.index - 20), match.index);
+            const afterText = text.substring(match.index + match[0].length, Math.min(text.length, match.index + match[0].length + 20));
+            
+            // Contextos que sugerem que NÃO é um link malicioso
+            const safeContexts = [
+                /(?:email|e-mail|contato|site|página|página|endereço)/i.test(beforeText),
+                /(?:versão|atualização|update)/i.test(beforeText),
+                /(?:custou|custa|preço|valor|R\$|\$)/i.test(beforeText),
+                /(?:horário|hora|às|das)/i.test(beforeText)
+            ];
+            
+            if (!safeContexts.some(safe => safe)) {
+                links.push(match[1]);
+            }
+        }
+    }
+    
+    return [...new Set(links)]; // Remove duplicatas
 };
 
-// Função principal para tratar links não permitidos
 export const handleAntiLink = async (sock, msg, groupId) => {
     try {
-        // Regex para detectar links
-        const linkPattern = /(https?:\/\/[^\s]+|www\.[^\s]+|[^\s]+\.[a-z]{2,}\/[^\s]*|\b[a-zA-Z0-9-]+\.(?:com|org|net|edu|gov|mil|int|co|br|uk|de|fr|jp|cn|ru|in|au|ca|io|ly|me|app|tv|fm|live|online|site|tech|info|biz|name|mobi|pro|travel|museum|aero|coop|jobs|cat|xxx|tel|asia|post|geo|xxx)(?:\/[^\s]*)?)/gi;
-
-        // Ignora mensagens do próprio bot
-        if (msg.key.fromMe) {
-            console.log('Mensagem ignorada: enviada pelo próprio bot');
-            return;
-        }
-
-        // Verifica se o usuário é administrador
+        if (msg.key.fromMe) return;
+        
+        // Verifica se é admin
         const senderId = msg.key.participant || msg.key.remoteJid;
-        const groupMetadata = await sock.groupMetadata(groupId);
-        const senderParticipant = groupMetadata.participants.find(p => p.id === senderId);
-
-        if (senderParticipant && (senderParticipant.admin === 'admin' || senderParticipant.admin === 'superadmin')) {
-            console.log('Mensagem de administrador - links permitidos');
-            return;
-        }
-
-        // Extrai o texto da mensagem
-        const text = extractMessageText(msg);
-
-        if (!text || text.trim() === '') {
-            console.log('Nenhum texto encontrado na mensagem');
-            return;
-        }
-
-        // Obtém link oficial do grupo
-        const groupInviteLink = await getGroupInviteLink(sock, groupId);
-        if (!groupInviteLink) {
-            console.error('Não foi possível obter o link de convite do grupo.');
-            return;
-        }
-
-        const normalizedGroupInviteLink = groupInviteLink
-            .replace(/^https?:\/\//, '')
-            .toLowerCase()
-            .trim();
-
-        // Procura links na mensagem
-        const links = text.match(linkPattern);
-
-        if (links && links.length > 0) {
-            let shouldDeleteMessage = false;
-            let detectedLink = '';
-
-            for (let link of links) {
-                const cleanLink = link.trim();
-                const normalizedLink = cleanLink
-                    .replace(/^https?:\/\//, '')
-                    .toLowerCase()
-                    .trim();
-
-                if (!normalizedLink.includes(normalizedGroupInviteLink) &&
-                    normalizedLink !== normalizedGroupInviteLink) {
-                    shouldDeleteMessage = true;
-                    detectedLink = cleanLink;
-                    break;
-                }
+        const groupData = await sock.groupMetadata(groupId);
+        const isAdmin = groupData.participants.find(p => p.id === senderId)?.admin;
+        
+        if (isAdmin) return;
+        
+        const { text, type } = extractText(msg);
+        if (!text.trim()) return;
+        
+        // Usar a nova função de validação
+        const detectedLinks = isValidLink(text);
+        if (detectedLinks.length === 0) return;
+        
+        console.log(`🔍 Links detectados: ${detectedLinks.join(', ')}`);
+        
+        // Verifica se algum link não é do próprio grupo
+        const groupLink = await getGroupInviteLink(sock, groupId);
+        const groupInviteCode = groupLink?.split('/').pop();
+        
+        const unauthorizedLinks = detectedLinks.filter(link => {
+            // Normaliza o link para comparação
+            const normalizedLink = link.replace(/^https?:\/\//, '').toLowerCase();
+            
+            // Permite apenas links do próprio grupo WhatsApp
+            if (normalizedLink.includes('chat.whatsapp.com') || normalizedLink.includes('whatsapp.com')) {
+                // Verifica se é o link do próprio grupo
+                return !normalizedLink.includes(groupInviteCode);
             }
-
-            if (shouldDeleteMessage) {
-                const offenderId = msg.key.participant || msg.key.remoteJid;
-
-                // Apaga imediatamente antes de tudo
-                await sock.sendMessage(groupId, { delete: msg.key }).catch(() => {});
-
-                // Tenta deletar a mensagem com múltiplas tentativas
-                const deletionSuccess = await deleteMessageWithRetries(sock, groupId, msg.key);
-
-                // Notifica admins com informação sobre o sucesso da exclusão (sem exibir o link)
-                await notifyAdminsAndOffender(sock, groupId, offenderId, detectedLink, deletionSuccess);
-
-                if (!deletionSuccess) {
-                    console.log('Tentando método alternativo de exclusão...');
-                    try {
-                        setTimeout(async () => {
-                            await sock.sendMessage(groupId, { delete: msg.key });
-                            console.log('Tentativa de exclusão alternativa executada');
-                        }, 1500);
-                    } catch (altError) {
-                        console.error('Método alternativo também falhou:', altError);
-                    }
-                }
-            }
+            
+            // Todos os outros links são não autorizados
+            return true;
+        });
+        
+        if (unauthorizedLinks.length > 0) {
+            console.log(`🗑️ Deletando mensagem de ${senderId.split('@')[0]} - Links não autorizados: ${unauthorizedLinks.join(', ')}`);
+            const success = await deleteMessage(sock, groupId, msg.key);
+            setImmediate(() => notifyAdminsAndRemoveUser(sock, groupId, senderId, type, success, unauthorizedLinks));
         }
+        
     } catch (error) {
-        console.error('Erro no handleAntiLink:', error);
+        console.error('Erro no antilink:', error);
     }
 };
 
-// Função adicional para monitorar e tentar re-deletar mensagens que não foram removidas
-export const monitorAndCleanupLinks = async (sock, groupId, checkInterval = 30000) => {
-    setInterval(async () => {
-        try {
-            console.log('Executando limpeza periódica de links...');
-            // Aqui você pode implementar lógica adicional para verificar mensagens recentes
-            // e tentar deletar novamente aquelas que contém links não permitidos
-        } catch (error) {
-            console.error('Erro na limpeza periódica:', error);
-        }
-    }, checkInterval);
+// POLÍTICA RESTRITIVA: Nenhum link externo é permitido
+// Apenas o link do próprio grupo WhatsApp é autorizado
+
+export const testAntiLink = async (sock, groupId) => {
+    const testCases = [
+        'Teste: https://exemplo.com',        // ❌ Deve detectar (link externo)
+        'Visitem www.site.com.br',          // ❌ Deve detectar (link externo)
+        'Olá pessoal! Custou R$ 15.50',     // ✅ NÃO deve detectar (valor)
+        'Versão 2.0 chegou',                // ✅ NÃO deve detectar (versão)
+        'Email: joao@empresa.com.br',       // ✅ NÃO deve detectar (contexto email)
+        'Site malicioso.com aqui',          // ❌ Deve detectar (domínio suspeito)
+        'youtube.com/video123',             // ❌ Deve detectar (NENHUM link externo é permitido)
+        'chat.whatsapp.com/abc123'          // ❌ Deve detectar (apenas link do próprio grupo é permitido)
+    ];
+    
+    console.log('🧪 Testando antilink - POLÍTICA RESTRITIVA (nenhum link externo permitido)...');
+    
+    for (const [index, testText] of testCases.entries()) {
+        const testMsg = {
+            key: {
+                remoteJid: groupId,
+                fromMe: false,
+                id: `test_${Date.now()}_${index}`,
+                participant: '5511999999999@s.whatsapp.net'
+            },
+            message: { conversation: testText }
+        };
+        
+        console.log(`\n📝 Teste ${index + 1}: "${testText}"`);
+        const links = isValidLink(testText);
+        console.log(`🔍 Links detectados: ${links.length > 0 ? links.join(', ') : 'Nenhum'}`);
+        
+        // Simula o processamento sem realmente deletar/remover
+        // await handleAntiLink(sock, testMsg, groupId);
+    }
 };

@@ -1,13 +1,17 @@
+// bot.js
 import 'dotenv/config';
 import { makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason } from '@whiskeysockets/baileys';
 import qrcode from 'qrcode-terminal';
 import fs from 'fs';
 import pino from 'pino';
-import { handleMessages } from './bot/codigos/messageHandler.js';
+
+import { handleMessages, updateGroupOnJoin } from './bot/codigos/messageHandler.js';
 import { configurarBoasVindas } from './bot/codigos/boasVindas.js';
 import { configurarDespedida } from './bot/codigos/despedidaMembro.js';
 import { isBlacklistedRealtime } from './bot/codigos/blacklistFunctions.js';
 import { verificarBlacklistAgora } from './bot/codigos/blacklistChecker.js';
+import { handleGroupParticipantsUpdate, setupClient } from './bot/codigos/avisoadm.js';
+import configurarBloqueio from './bot/codigos/bloquearUsuarios.js';
 import pool from './db.js';
 
 const logger = pino({ level: 'fatal', enabled: false });
@@ -72,6 +76,9 @@ async function connectToWhatsApp() {
                 isConnecting = false;
 
                 if (!fs.existsSync('./downloads')) fs.mkdirSync('./downloads', { recursive: true });
+
+                // Inicializa bloqueio de usuários privados
+                configurarBloqueio(sock);
             }
 
             if (connection === "close") {
@@ -98,21 +105,22 @@ async function connectToWhatsApp() {
             }
         });
 
-        // Eventos de participantes do grupo
+        // Eventos de participantes do grupo (avisos + boas-vindas/despedida/blacklist)
         sock.ev.on('group-participants.update', async (update) => {
             try {
                 const groupId = update.id;
-                const groupName = (await sock.groupMetadata(groupId)).subject;
+
+                // 1️⃣ Notificações de promoção/demissão/entrada/saída
+                await handleGroupParticipantsUpdate(sock, update, sock.user);
 
                 for (const participant of update.participants) {
                     const userPhone = participant.split('@')[0];
 
                     if (update.action === 'add') {
                         const blacklisted = await isBlacklistedRealtime(participant);
-
                         if (blacklisted) {
                             await sock.groupParticipantsUpdate(groupId, [participant], 'remove');
-                            console.log(`🚨 Usuário ${userPhone} removido (blacklist) - ${groupName}`);
+                            console.log(`🚨 Usuário ${userPhone} removido (blacklist) - ${groupId}`);
                         } else {
                             await configurarBoasVindas(sock, groupId, participant);
                         }
@@ -120,6 +128,12 @@ async function connectToWhatsApp() {
                         await configurarDespedida(sock, groupId, participant);
                     }
                 }
+
+                // 🏷️ Auto-atualizar grupo para AutoTag
+                if (['add', 'remove', 'promote', 'demote'].includes(update.action)) {
+                    await updateGroupOnJoin(sock, groupId);
+                }
+
             } catch (error) {
                 console.error('❌ Erro no evento de participantes:', error);
             }
@@ -145,7 +159,6 @@ async function connectToWhatsApp() {
                         const groupId = message.key.remoteJid;
                         const sender = message.key.participant || message.key.remoteJid;
 
-                        // Verifica admin consultando participantes
                         const metadata = await sock.groupMetadata(groupId);
                         const participantData = metadata.participants.find(p => p.id === sender);
                         const isAdmin = participantData?.admin === 'admin' || participantData?.admin === 'superadmin';
@@ -158,21 +171,15 @@ async function connectToWhatsApp() {
                             continue;
                         }
 
-                        // Mensagem temporária de checando blacklist
                         const checkingMsg = await sock.sendMessage(groupId, { text: `${BOT_TITLE} 🔎 Checando a blacklist...` });
-
-                        // Executa verificação otimizada da blacklist
                         const removidos = await verificarBlacklistAgora(sock, groupId);
 
-                        // Prepara mensagem de resultado
                         const resultText = removidos.length > 0
                             ? `${BOT_TITLE} 🚨 *Blacklist Atualizada* 💃🎶\n✅ ${removidos.length} usuário(s) removido(s) do grupo:\n• ${removidos.join('\n• ')}`
                             : `${BOT_TITLE} ✅ Nenhum usuário da blacklist encontrado neste grupo.`;
 
-                        // Envia resultado
                         const resultMsg = await sock.sendMessage(groupId, { text: resultText });
 
-                        // Remove todas as mensagens relacionadas ao #veriflista após 8 segundos
                         setTimeout(async () => {
                             await sock.sendMessage(groupId, { delete: { remoteJid: checkingMsg.key.remoteJid, id: checkingMsg.key.id, fromMe: true } });
                             await sock.sendMessage(groupId, { delete: { remoteJid: resultMsg.key.remoteJid, id: resultMsg.key.id, fromMe: true } });
@@ -183,6 +190,9 @@ async function connectToWhatsApp() {
                 console.error('❌ Erro no listener de mensagens:', error);
             }
         });
+
+        // Configura reconexão automática do avisoadm.js
+        setupClient(sock);
 
         return sock;
 
@@ -206,4 +216,5 @@ process.on('uncaughtException', (error) => {
     console.error('❌ Erro crítico:', error.message);
 });
 
+// Inicia conexão
 connectToWhatsApp();
