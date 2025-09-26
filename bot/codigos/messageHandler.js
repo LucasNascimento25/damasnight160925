@@ -61,7 +61,7 @@ export async function handleMessages(sock, message) {
 
         // 🔹 PRIORIDADE 3: Processar AutoTag (#all damas)
         if (!handled) {
-            const tagResult = await autoTag.processMessage(sock, from, userId, content);
+            const tagResult = await autoTag.processMessage(sock, from, userId, content, message.key);
 
             if (tagResult) {
                 if (tagResult.error) {
@@ -69,6 +69,11 @@ export async function handleMessages(sock, message) {
                     return;
                 }
 
+                // 🗑️ REMOVE A MENSAGEM ORIGINAL PRIMEIRO
+                console.log('🗑️ Removendo mensagem original com #all damas...');
+                await autoTag.deleteOriginalMessage(sock, from, message.key);
+
+                // 📤 DEPOIS ENVIA A NOVA MENSAGEM LIMPA
                 await sock.sendMessage(from, {
                     text: tagResult.cleanMessage || ' ',
                     mentions: tagResult.mentions

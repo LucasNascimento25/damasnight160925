@@ -59,7 +59,7 @@ class AutoTagHandler {
         }
     }
 
-    async processMessage(sock, from, userId, content) {
+    async processMessage(sock, from, userId, content, messageKey) {
         try {
             if (!from.endsWith('@g.us')) return null;
             if (!content.toLowerCase().includes('#all damas')) return null;
@@ -73,9 +73,12 @@ class AutoTagHandler {
             const isAdmin = await this.isUserAdmin(sock, groupId, userId);
             if (!isAdmin) {
                 const styledTitle = "👏🍻 *DﾑMﾑS* 💃🔥 *Dﾑ* *NIGӇԵ*💃🎶🍾🍸";
+                await sock.sendMessage(from, { 
+                    text: `${styledTitle}\n\n🚫 *ACESSO NEGADO*\n\n❌ Apenas administradores podem usar o comando \`#all damas\`!\n\n👨‍💼 Solicite a um admin para marcar o grupo.` 
+                });
                 return { 
-                    error: true, 
-                    message: `${styledTitle}\n\n🚫 *ACESSO NEGADO*\n\n❌ Apenas administradores podem usar o comando \`#all damas\`!\n\n👨‍💼 Solicite a um admin para marcar o grupo.` 
+                    success: true, 
+                    processed: true 
                 };
             }
 
@@ -87,19 +90,62 @@ class AutoTagHandler {
             const groupData = this.groups[groupId];
             if (!groupData || !groupData.participants) return null;
 
+            // 🗑️ PRIMEIRO: Remove a mensagem original que contém o comando
+            if (messageKey) {
+                try {
+                    console.log('🗑️ Removendo mensagem original com #all damas...');
+                    await sock.sendMessage(from, { delete: messageKey });
+                    console.log('✅ Mensagem original removida com sucesso!');
+                } catch (error) {
+                    console.error('❌ Erro ao remover mensagem original:', error);
+                }
+            }
+
+            // ✨ NOVA LÓGICA PARA TRATAR MENSAGENS VAZIAS
             const cleanMessage = content.replace(/#all\s+damas/gi, '').trim();
+            
+            // Se não há mensagem, verifica se é só o comando
+            if (!cleanMessage) {
+                // Se digitou apenas "#all damas", mostra ajuda
+                if (content.trim().toLowerCase() === '#all damas') {
+                    await sock.sendMessage(from, { 
+                        text: `💡 *Como usar o AutoTag:*\n\n📝 Digite sua mensagem + #all damas\n\n✨ *Exemplo:*\n\`Festa hoje às 22h #all damas\`\n\n📌 Ou use apenas \`#all damas ola\` para uma saudação simples.` 
+                    });
+                    return { success: true, processed: true };
+                }
+            }
+
             const mentions = this.generateMentions(groupData.participants, userId);
 
             // Adiciona o título estilizado na mensagem
             const styledTitle = "👏🍻 *DﾑMﾑS* 💃🔥 *Dﾑ* *NIGӇԵ*💃🎶🍾🍸";
-            const finalMessage = cleanMessage ? `${styledTitle}\n\n${cleanMessage}` : styledTitle;
+            
+            // Se há mensagem limpa, usa ela. Se não, usa uma mensagem padrão
+            const messageToSend = cleanMessage || "Olá pessoal! 💃✨🎉";
+            const finalMessage = `${styledTitle}\n\n${messageToSend}`;
 
+            // 📤 SEGUNDO: Envia a mensagem limpa diretamente
+            console.log('📤 Enviando mensagem limpa...');
+            await sock.sendMessage(from, {
+                text: finalMessage,
+                mentions: mentions
+            });
+            console.log('✅ Mensagem limpa enviada com sucesso!');
+
+            // Log para controle
+            console.log(`\n🏷️ ========= AUTO TAG =========`);
+            console.log(`👤 Autor: ${userId}`);
+            console.log(`📱 Grupo: ${groupData.name}`);
+            console.log(`📝 Original: ${content}`);
+            console.log(`✨ Limpa: ${finalMessage}`);
+            console.log(`👥 Marcados: ${mentions.length} pessoas`);
+            console.log(`🕒 ${new Date().toLocaleString('pt-BR')}`);
+            console.log(`=====================================\n`);
+
+            // Retorna sucesso mas sem dados para o messageHandler não processar novamente
             return {
-                originalMessage: content,
-                cleanMessage: finalMessage,
-                mentions,
-                tagsCount: mentions.length,
-                groupName: groupData.name
+                success: true,
+                processed: true
             };
         } catch (error) {
             console.error('❌ Erro ao processar auto tag:', error);
@@ -217,6 +263,7 @@ Festa hoje às 22h
 
 🔔 *Todos os membros recebem notificação automaticamente (menções invisíveis)*
 
+⚠️ *A mensagem original com o comando será automaticamente removida*
 ⚠️ *Usuários comuns* que tentarem usar receberão uma mensagem de acesso negado.
             `.trim();
             await sock.sendMessage(from, { text: helpText });
